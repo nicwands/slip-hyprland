@@ -4,9 +4,9 @@
 
 DMENU_CMD="rofi -dmenu"
 RECORD_PIDFILE="/tmp/slip_record.pid"
-IMAGES="$HOME/Pictures"
-VIDEOS="$HOME/Videos"
-DMENU_PROMPT="slip"
+IMAGES="$HOME/Pictures/Screenshots"
+VIDEOS="$HOME/Videos/Screencasts"
+DMENU_PROMPT="Slip"
 
 # Maximum resolution (either width or height) for gifs.
 # Gifs larger than this will be scaled.
@@ -17,4 +17,4 @@ GIF_FPS=15
 # Set to 1 if sound should be included in recordings.
 SOUND=0
 # Set to 1 if slip shouldn't upload.
-NOUPLOAD=0
+NOUPLOAD=1

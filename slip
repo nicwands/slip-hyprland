@@ -5,45 +5,36 @@ set -eo pipefail
 VERSION="2.0.6"
 
 # Sane defaults in case of not being set in the config / config not existing.
-CREDENTIALS_FILE="$HOME/.config/slip/credentials"
 RECORD_PIDFILE="/tmp/slip_record.pid"
 IMAGES="$HOME/Pictures"
 VIDEOS="$HOME/Videos"
 GIF_SCALE="640"
 GIF_FPS=15
 SOUND=0
-NOUPLOAD=0
+NOUPLOAD=1
 
 DMENU_CMD="rofi -dmenu -p slip"
 
 # Load config.
-CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/slip/config"
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/rofi/slip-hyprland/config"
 if [ -f $CONFIG ]; then
     source $CONFIG
 else
     echo "No config was found - using default options.  Please copy the example configuration to ~/.config/slip/config from https://github.com/Toqozz/slip"
 fi
 
-CLIENT_ID="abd3a90bbfb65e9"
-
 # Dmenu prompts.
-DMENU_OPTS="screenshot
-video
-gif
-exit"
-DMENU_RECORD_OPTS="stop
-cancel"
-DMENU_UPLOAD_OPTS_BIG="upload (gfycat)
-delete
-exit"
-DMENU_UPLOAD_OPTS="upload (imgur)
-upload (gfycat)
-delete
-exit"
-
-# Maximum size for upload (kb).
-# Gfycat does not have a file limit.
-MAX_GIF_SIZE_IMGUR=10000
+TYPE_SELECTED=false
+DMENU_TYPE_OPTS="Screenshot
+Video
+GIF
+Exit"
+DMENU_AREA_OPTS="Active
+Screen
+Output
+Area"
+DMENU_RECORD_OPTS="Stop
+Cancel"
 
 function usage() {
     echo ""
@@ -61,93 +52,17 @@ function usage() {
     echo ""
 }
 
-function upload_imgur() {
-    file="$1"
-
-    if [ -f "$file" ]; then
-        if [ -f "$CREDENTIALS_FILE" ]; then
-            # We have an auth token to use.
-            check_auth_credentials
-            if [ $? -ne 1 ]; then
-                # Token valid.
-                curl -sH "Authorization: Bearer ${access_token}" -F "image=@$file" "https://api.imgur.com/3/upload"
-            fi
-        else
-            # Imgur needs to know what program is using its services.
-            curl -sH "Authorization: Client-ID ${CLIENT_ID}" -F "image=@$file" "https://api.imgur.com/3/upload"
-        fi
-    else
-        echo "File does not exist, what happened?"
-    fi
-}
-
-function upload_gfycat() {
-    local file="$1"
-
-    local result=$(curl -s -XPOST https://api.gfycat.com/v1/gfycats -H "Content-Type: application/json")
-    local gfyname=$(parse "gfycat" $result)
-    curl -s "https://filedrop.gfycat.com/$gfyname" --upload-file "$file"
-
-    # No new line so we can append it easily.
-    echo -n "$gfyname"
-}
-
-function check_auth_credentials() {
-    token_expire_time=0
-    if [ -f "${CREDENTIALS_FILE}" ]; then
-        source "${CREDENTIALS_FILE}"
-    fi
-
-    if [ ! -z ${access_token} ]; then
-        current_time="$(date +%s)"
-        preemptive_refresh_time="$((10*60))"
-        expired="$((current_time > (token_expire_time - preemptive_refresh_time)))"
-
-        if [ "${expired}" -eq "0" ]; then
-            #token has expired, get a new one.
-            echo 'The authorization token has expired, please get a new one.'
-            return 1;
-        fi
-    else
-        return 1;
-    fi
-}
-
-function clip_clear() {
-    # Clear x cliboard selection.
-    xsel -bc    # Ctrl-v / Shift-Insert.
-    # xsel -pc  # Middle click.
-}
-
-# Run slop and get the geometry line.
-function slop_geom() {
-    if [ "$1" = "image" ]; then
-        slop -f '%wx%h+%x+%y'
-    else
-        slop -f '%wx%h|%x,%y' # | sed -e s/+/\|/ -e s/+/,/
-    fi
-    #elif [ "$1" = "video" ]; then
-        #slop -f '%wx%h+%x+%y' | sed -e s/+/\|/ -e s/+/,/
-        #slop | sed -n 5p | sed -e s/G=// -e s/+/\|/ -e s/+/,/
-    #elif [ "$1" = "gif" ]; then
-        #slop -f '%wx%h+%x+%y' | sed -e s/+/\|/ -e s/+/,/
-}
-
 # Take the shot (or start the video.)
 function shot() {
     if [ "$1" = "image" ]; then
-        extension=".png"    # img-2016-04-16-153906.png
-        filename="$IMAGES/img-`date +%Y-%m-%d-%H%M%S`$extension"    # .png, .jpg
-        maim -g "$2" $filename
-        # TODO, do we want more dependencies? (optional dependencies?)
-        #ffmpeg -f x11grab -video_size "$2" -i "$DISPLAY+$3" -vframes 1 $filename &> /dev/null
+        grimblast --notify copysave "${2,,}"
     elif [ "$1" = "video" ]; then
-        extension=".mkv"    # vid-2016-04-16-153906.mkv
-        filename="$VIDEOS/vid-`date +%Y-%m-%d-%H%M%S`$extension"    # .mkv, .mp4
+        extension=".mkv" 
+        filename="$VIDEOS/screencast-`date +%Y-%m-%d-%H%M%S`$extension"
         if [ $SOUND == 0 ]; then
-            ffmpeg -f x11grab -video_size "$2" -framerate 60 -i "$DISPLAY+$3" -loglevel quiet -c:v libx264 -preset ultrafast $filename  &
+            wf-recorder -g "$2" -f "$filename" &
         else
-            ffmpeg -f pulse -i 1 -f x11grab -video_size "$2" -framerate 60 -i "$DISPLAY+$3" -loglevel quiet -c:v libx264 -preset ultrafast $filename &
+            wf-recorder -a -g "$2" -f "$filename" &
         fi
         echo "$! vid $filename" > "$RECORD_PIDFILE"
     elif [ "$1" = "gif" ]; then
@@ -155,20 +70,14 @@ function shot() {
         tmpfilename="/tmp/gif-`date +%Y-%m-%d-%H%M%S-tmp`.mkv"
         filename="$VIDEOS/gif-`date +%Y-%m-%d-%H%M%S`$extension"    # .gif
         # Record a video to be converted to gif.
-        ffmpeg -f x11grab -video_size "$2" -framerate $GIF_FPS -i "$DISPLAY+$3" -loglevel quiet -c:v libx264 -preset ultrafast $tmpfilename &
-        #ffmpeg -f x11grab -video_size "$2" -framerate 15 -i "$DISPLAY+$3" -vf scale="$GIF_SCALE:-1" $filename &> /dev/null &
 
-        # We need to access this information later.
-        ratio=$(awk -F"x" '{ print int($1/$2) }' <<< "$2") # We only really need a binary answer.
-        if [ "$ratio" -ge 1 ]; then echo "$! gif $tmpfilename $filename 0" > "$RECORD_PIDFILE"
-        else echo "$! gif $tmpfilename $filename 1" > "$RECORD_PIDFILE"
-        fi
+        echo "$! gif $tmpfilename $filename 1" > "$RECORD_PIDFILE"
     fi
 }
 
-function kill_ffmpeg() {
-    # Kill ffmpeg (stopping the recording.)
-    kill $1 || echo "Failed to kill ffmpeg, did it crash?  Removing $RECORD_PIDFILE anyway."
+function kill_wf() {
+    # Kill wf-recorder (stopping the recording.)
+    kill -INT $1 || echo "Failed to kill wf-recorder, did it crash?  Removing $RECORD_PIDFILE anyway."
     # Remove the pid file so that slip can be used as normal again.
     rm "$RECORD_PIDFILE"
 }
@@ -204,7 +113,7 @@ function stop_rec() {
     local pfn="${tfn}-palette.png"    # Palette file name (for gif rendering).
 
     # Stop recording.
-    kill_ffmpeg "$pid"
+    kill_wf "$pid"
 
     # When processing a gif, we canvert it straight away and then upload.
     # NOTE: gfycat does not require the video to be converted, but we convert it anyway to store
@@ -213,49 +122,8 @@ function stop_rec() {
     if [ "$2" = "gif" ]; then
         fn=$(convert_to_gif "$tfn" "$pfn" "$fn" "$5")
         size=$(du -k $fn | cut -f1)
-
-        if [ $NOUPLOAD == 0 ]; then
-            if [ "$size" -lt "${MAX_GIF_SIZE_IMGUR}" ]; then
-                choice=$(eval "$DMENU_CMD" <<< "$DMENU_UPLOAD_OPTS")
-            else
-                choice=$(eval "$DMENU_CMD" <<< "$DMENU_UPLOAD_OPTS_BIG")
-            fi
-
-            if [ "$choice" = "upload (gfycat)" ]; then
-                clip_clear
-                name=$(upload_gfycat "$tfn")
-                url="https://gfycat.com/$name"
-                notify "Uploading to $url …"
-                echo "$url"
-                echo -n "$url" | xsel -bi  # Read to clipboard.
-            elif [ "$choice" = "upload (imgur)" ]; then
-                clip_clear
-                output=$(upload_imgur "$fn")
-                url=$(parse "imgur" "$output")
-                notify "$url"
-                echo "$url"
-                echo -n "$url" | xsel -bi  # Read to clipboard.
-            elif [ "$choice" = "delete" ]; then
-                rm $fn
-            fi
-        fi
     else
         notify "$fn"
-    fi
-}
-
-# Parse x,y -- but also imgur.
-function parse() {
-    if [ "$1" = "geometryx" ]; then
-        awk -F"|" '{ print $1 }' <<< "$2" 
-    elif [ "$1" = "geometry+" ]; then
-        awk -F"|" '{ print $2 }' <<< "$2"
-    elif [ "$1" = "imgur" ]; then
-        jq -r ".data.link" <<< "$2"
-        #sed -e 's/.*\"link\":"\([^"]*\).*/\1/' -e 's/\\//g' <<< "$2"
-        #sed -e 's/\"link\":"\([^"]*\)/\1/' -e 's/\\//g' <<< "$2"
-    elif [ "$1" = "gfycat" ]; then
-        jq -r ".gfyname" <<< "$2"
     fi
 }
 
@@ -264,48 +132,21 @@ function notify() {
 }
 
 function main() {
-    if [ "$1" = "screenshot" ]; then
-        # Run slop and get geometry from it.
-        # maim naturally supports slop's output coordinates.
-        geometry=$(slop_geom "image")
-        # Take the shot.
-        shot "image" "$geometry"
-        # Parse imgur json into link.
-
-        # If noupload is not set.
-        if [ $NOUPLOAD == 0 ]; then
-            #echo "uploading..."
-            # Clear cliboard before doing anything, so we can copy link to it later.
-            clip_clear
-            output=$(upload_imgur "$filename")
-            url=$(parse "imgur" "$output")
-            # Notify user that upload has finished.
-            notify "$url"
-            echo "$url"
-            # Read to clipboard, removing trailing newline.
-            echo -n "$url" | xsel -bi
-        else
-            notify "$filename"
-        fi
-
-        # echo "$url" | xsel -pi  # Read to primary.
-    elif [ "$1" = "video" ]; then
-        geometry=$(slop_geom "video")
-        wxh=$(parse "geometryx" $geometry)
-        off=$(parse "geometry+" $geometry)
-        shot "video" "$wxh" "$off"
-    elif [ "$1" = "gif" ]; then
+    input="${1,,}"
+    if [ $input = "screenshot" ]; then
+        shot "image" $(eval "$DMENU_CMD" <<< "$DMENU_AREA_OPTS")
+    elif [ $input = "video" ]; then
+        geometry=$(slurp)
+        shot "video" "$geometry"
+    elif [ $input = "gif" ]; then
         geometry=$(slop_geom "gif")
         wxh=$(parse "geometryx" $geometry)
         off=$(parse "geometry+" $geometry)
         shot "gif" "$wxh" "$off"
-    elif [ "$1" = "stop" ]; then
+    elif [ $input = "stop" ]; then
         # Get info of recording process.
-        local info
-        # Get infor from the pidfile.
-        info=$(cat "$RECORD_PIDFILE")
-        # Stop with parameters ("<pid> <type> <filename> <ratio>")
-        stop_rec $info
+        pid=$(pidof wf-reforder)
+        stop_rec $pid
         exit 0
     else
         exit 0
@@ -313,11 +154,7 @@ function main() {
 }
 
 # Dependencies.
-depends="curl
-jq
-maim
-slop
-ffmpeg"
+depends="slurp grim ffmpeg"
 while read line
 do
     if ! type $line &> /dev/null ; then
@@ -349,6 +186,6 @@ elif [[ ( $# == 0 ) || ( $# == 1 && "$NOUPLOAD" == "1" ) ]]; then
     if [ -a "$RECORD_PIDFILE" ]; then
         main $(eval "$DMENU_CMD" <<< "$DMENU_RECORD_OPTS")
     else
-        main $(eval "$DMENU_CMD" <<< "$DMENU_OPTS")
+        main $(eval "$DMENU_CMD" <<< "$DMENU_TYPE_OPTS")
     fi
 fi
